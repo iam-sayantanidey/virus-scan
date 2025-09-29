@@ -78,5 +78,9 @@ def lambda_handler(event, context):
                 print(f"Uploading file to {dest_bucket}/{object_key}...")
                 s3.upload_file(tmp_file.name, dest_bucket, object_key)
                 print(f"File uploaded successfully to {dest_bucket}/{object_key}")
+
+                s3.delete_object(Bucket=bucket_name, Key=object_key)
+                print(f"Deleted original file {object_key} from bucket {bucket_name}")
+                
             except Exception as e:
-                print(f"Error uploading file {object_key} to {dest_bucket}: {e}")
+                print(f"Error uploading/deleting file {object_key}: {e}")

@@ -1,13 +1,11 @@
 # Use AWS Lambda Python 3.10 base image
 FROM public.ecr.aws/lambda/python:3.10
 
-# Install ClamAV CLI and required tools
+# Install ClamAV CLI and update virus definitions
 RUN yum -y install clamav clamav-update && yum clean all
-
-# Update ClamAV virus database at build time
 RUN freshclam
 
-# Copy your Lambda code
+# Copy Lambda code
 COPY app.py ${LAMBDA_TASK_ROOT}/
 
 # Copy Python dependencies and install

@@ -1,25 +1,18 @@
 # Use AWS Lambda Python 3.10 base image
 FROM public.ecr.aws/lambda/python:3.10
 
-# Install ClamAV and required tools
-RUN yum -y install clamav clamav-update clamd && yum clean all
+# Install ClamAV CLI and required tools
+RUN yum -y install clamav clamav-update && yum clean all
 
-# Update ClamAV virus database
+# Update ClamAV virus database at build time
 RUN freshclam
 
-# Create ClamAV runtime directory
-RUN mkdir -p /var/run/clamd && chown -R root:root /var/run/clamd
+# Copy your Lambda code
+COPY app.py ${LAMBDA_TASK_ROOT}/
 
-# Copy your Lambda code into the container
-COPY app.py ${LAMBDA_TASK_ROOT}
-
-# Install Python dependencies (clamd, boto3, etc.)
+# Copy Python dependencies and install
 COPY requirements.txt .
 RUN pip install -r requirements.txt
 
-# Expose the ClamAV UNIX socket directory (optional but good practice)
-ENV CLAMD_SOCKET=/var/run/clamd/clamd.sock
-
-# Start clamd in background and then run Lambda
-CMD [ "sh", "-c", "clamd & python -m awslambdaric app.lambda_handler" ]
-
+# Command for Lambda to start
+CMD ["app.lambda_handler"]

@@ -6,7 +6,7 @@ phases:
       - echo Logging in to Amazon ECR...
       - aws --version
       - aws ecr get-login-password --region us-west-2 | docker login --username AWS --password-stdin 722136401996.dkr.ecr.us-west-2.amazonaws.com
-      - REPOSITORY_URI=722136401996.dkr.ecr.us-west-2.amazonaws.com/virus-scan-lambda
+      - REPOSITORY_URI=722136401996.dkr.ecr.us-west-2.amazonaws.com/virus-scan-ecs
       - IMAGE_TAG=build-$(echo $CODEBUILD_BUILD_ID | awk -F":" '{print $2}')
       
   build:

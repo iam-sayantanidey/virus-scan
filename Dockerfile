@@ -1,16 +1,29 @@
-# Use AWS Lambda Python 3.10 base image
-FROM public.ecr.aws/lambda/python:3.10
+# Use official Python base image (not Lambda base anymore)
+FROM python:3.10-slim
 
-# Install ClamAV CLI and update virus definitions
-RUN yum -y install clamav clamav-update && yum clean all
+# Install system dependencies and ClamAV
+RUN apt-get update && apt-get install -y \
+    clamav \
+    clamav-daemon \
+    clamav-freshclam \
+    && rm -rf /var/lib/apt/lists/*
+
+# Update ClamAV virus definitions at build time
 RUN freshclam
 
-# Copy Lambda code
-COPY app.py ${LAMBDA_TASK_ROOT}/
+# Set work directory
+WORKDIR /app
 
-# Copy Python dependencies and install
-COPY requirements.txt .
-RUN pip install -r requirements.txt
+# Copy application code
+COPY app.py /app/
 
-# Command for Lambda to start
-CMD ["app.lambda_handler"]
+# Copy and install Python dependencies
+COPY requirements.txt /app/
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Optional: add a healthcheck for ECS (can skip if not needed)
+HEALTHCHECK CMD clamscan --version || exit 1
+
+# Default command: run the script
+CMD ["python3", "app.py"]
+

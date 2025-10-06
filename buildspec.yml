@@ -7,15 +7,15 @@ phases:
       - aws --version
       - aws ecr get-login-password --region us-west-2 | docker login --username AWS --password-stdin 722136401996.dkr.ecr.us-west-2.amazonaws.com
       - REPOSITORY_URI=722136401996.dkr.ecr.us-west-2.amazonaws.com/virus-scan-ecs
-      - IMAGE_TAG=build-$(echo $CODEBUILD_BUILD_ID | awk -F":" '{print $2}')
-      
+      - IMAGE_TAG=$CODEBUILD_BUILD_NUMBER
+
   build:
     commands:
       - echo Build started on `date`
       - echo Building the Docker image...
       - docker build --no-cache -t $REPOSITORY_URI .
       - docker tag $REPOSITORY_URI:latest $REPOSITORY_URI:$IMAGE_TAG
-      
+
   post_build:
     commands:
       - echo Build completed on `date`

@@ -1,16 +1,26 @@
 #!/bin/bash
+set -e
 
-# Update virus database
-echo "[INFO] Updating ClamAV database..."
-freshclam
+echo "[INFO] Preparing ClamAV environment..."
+mkdir -p /var/run/clamav
+chown clamav:clamav /var/run/clamav
+chmod 755 /var/run/clamav
 
-# Start ClamAV daemon in background
+echo "[INFO] Updating virus definitions..."
+freshclam || echo "[WARN] freshclam failed, continuing with existing DB..."
+
 echo "[INFO] Starting ClamAV daemon..."
 clamd &
 
-# Wait a few seconds for clamd to start
-sleep 5
+# Wait until clamd is ready
+echo "[INFO] Waiting for ClamAV to start..."
+sleep 8
 
-# Start Python app
-echo "[INFO] Starting virus scan service..."
-python app.py
+# Health check (optional)
+if ! nc -z localhost 3310; then
+  echo "[ERROR] ClamAV daemon did not start properly!"
+  exit 1
+fi
+
+echo "[INFO] Starting Python scanner..."
+exec python /app/app.py

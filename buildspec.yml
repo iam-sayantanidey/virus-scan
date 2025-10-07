@@ -1,20 +1,27 @@
 version: 0.2
 
+env:
+  variables:
+    AWS_DEFAULT_REGION: "us-west-2"
+
 phases:
   pre_build:
     commands:
       - echo "🔐 Logging into Amazon ECR..."
-      - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
-      - IMAGE_URI=$ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/virus-scan-ecs
-      - IMAGE_TAG=build-$(echo $CODEBUILD_BUILD_ID | awk -F":" '{print $2}')
+      - ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+      - REPOSITORY_URI=$ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/virus-scan-ecs
+      - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $REPOSITORY_URI
+
   build:
     commands:
       - echo "🐳 Building Docker image..."
-      - docker build -t $IMAGE_URI:latest .
-      - docker tag $IMAGE_URI:latest $IMAGE_URI:$IMAGE_TAG
+      - IMAGE_TAG=build-$(echo $CODEBUILD_BUILD_ID | awk -F":" '{print $2}')
+      - docker build -t $REPOSITORY_URI:latest .
+      - docker tag $REPOSITORY_URI:latest $REPOSITORY_URI:$IMAGE_TAG
+
   post_build:
     commands:
-      - echo "📤 Pushing image to ECR..."
-      - docker push $IMAGE_URI:latest
-      - docker push $IMAGE_URI:$IMAGE_TAG
+      - echo "📤 Pushing Docker image to ECR..."
+      - docker push $REPOSITORY_URI:latest
+      - docker push $REPOSITORY_URI:$IMAGE_TAG
       - echo "✅ Build complete."

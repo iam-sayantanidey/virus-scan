@@ -1,24 +1,37 @@
-# Base image
 FROM python:3.10-slim
 
-# Install ClamAV and dependencies
-RUN apt-get update && \
-    apt-get install -y clamav clamav-daemon && \
-    rm -rf /var/lib/apt/lists/*
+# Install dependencies and ClamAV
+RUN apt-get update && apt-get install -y \
+    clamav \
+    clamav-daemon \
+    clamav-freshclam \
+    wget \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create necessary directories and set permissions
+RUN mkdir -p /var/run/clamav /var/lib/clamav \
+    && chown -R clamav:clamav /var/run/clamav /var/lib/clamav \
+    && chmod 755 /var/run/clamav
+
+# Update virus definitions during build (optional but helps first start)
+RUN freshclam || true
 
 # Set working directory
 WORKDIR /app
 
-# Copy requirements and install Python dependencies
-COPY requirements.txt .
+# Copy Python code and requirements
+COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy app code and entrypoint
-COPY app.py entrypoint.sh .
-RUN chmod +x entrypoint.sh
+COPY app.py ./
+COPY entrypoint.sh ./
 
-# Expose ClamAV port (optional)
+# Ensure entrypoint is executable
+RUN chmod +x /app/entrypoint.sh
+
+# Expose clamd default port (optional)
 EXPOSE 3310
 
-# Entrypoint
-ENTRYPOINT ["./entrypoint.sh"]
+# Run the entrypoint script
+ENTRYPOINT ["/app/entrypoint.sh"]

@@ -1,23 +1,17 @@
 FROM python:3.10-slim
 
 # Install dependencies
-RUN apt-get update && \
-    apt-get install -y clamav clamav-daemon netcat && \
-    rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y \
+    clamav \
+    clamav-freshclam \
+    && rm -rf /var/lib/apt/lists/*
 
-# Update ClamAV definitions
-RUN freshclam
+# Prepare ClamAV database directory
+RUN mkdir -p /var/lib/clamav && chown -R clamav:clamav /var/lib/clamav
 
-# Copy app
 WORKDIR /app
-COPY app.py .
-COPY requirements.txt .
+COPY app.py requirements.txt /app/
+RUN pip install --no-cache-dir -r requirements.txt
 
-RUN pip install -r requirements.txt
-
-# Expose port for clamd (default 3310)
-EXPOSE 3310
-
-# Start ClamAV daemon and then run your app
-CMD service clamav-daemon start && \
-    python3 app.py
+# Update virus definitions at startup, then run the poller
+CMD freshclam && python3 app.py

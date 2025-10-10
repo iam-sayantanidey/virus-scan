@@ -23,14 +23,20 @@ SQS_QUEUE_URL = os.environ["SQS_QUEUE_URL"]
 CLAMSCAN_TIMEOUT = 90  # seconds
 
 def update_virus_definitions():
-    try:
-        log.info("Updating ClamAV virus definitions...")
-        subprocess.run(["freshclam", "--quiet"], check=True, timeout=60)
-        log.info("Virus definitions updated successfully.")
-    except subprocess.TimeoutExpired:
-        log.warning("Virus definitions update timed out.")
-    except Exception as e:
-        log.error(f"Error updating virus definitions: {e}")
+    """Update ClamAV definitions with retries."""
+    retries = 3
+    for i in range(retries):
+        try:
+            log.info("Updating ClamAV virus definitions...")
+            subprocess.run(["freshclam", "--quiet"], check=True, timeout=60)
+            log.info("Virus definitions updated successfully.")
+            return
+        except subprocess.TimeoutExpired:
+            log.warning(f"Freshclam attempt {i+1} timed out, retrying...")
+        except Exception as e:
+            log.warning(f"Freshclam attempt {i+1} failed: {e}")
+        time.sleep(5)
+    log.error("Failed to update virus definitions after 3 attempts. Scanning may be inaccurate.")
 
 def scan_file(file_path):
     try:
@@ -66,7 +72,7 @@ def process_message(message_body):
         log.info(f"Deleted {object_key} from {bucket_name}")
 
 def main():
-    update_virus_definitions()  # <-- Run this once at startup
+    update_virus_definitions()  # Run at startup
     log.info("Starting SQS poller...")
     while True:
         try:
@@ -75,7 +81,6 @@ def main():
                 MaxNumberOfMessages=1,
                 WaitTimeSeconds=10
             )
-
             messages = response.get("Messages", [])
             if not messages:
                 log.info("No messages in queue. Waiting...")

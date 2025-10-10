@@ -1,14 +1,18 @@
 FROM python:3.10-slim
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    clamav \
-    clamav-daemon \
-    netcat \
+# Install system dependencies required for ClamAV
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        clamav \
+        clamav-daemon \
+        netcat \
+        gnupg \
+        dirmngr \
+        ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Update ClamAV virus definitions at build time
-RUN freshclam
+# Update ClamAV virus definitions at build time (quiet to avoid interactive prompts)
+RUN freshclam --quiet
 
 # Set working directory
 WORKDIR /app

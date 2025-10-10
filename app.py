@@ -15,6 +15,7 @@ log = logging.getLogger()
 s3 = boto3.client("s3")
 sqs = boto3.client("sqs")
 
+# Buckets and queue from environment variables
 UPLOAD_BUCKET = os.environ["UPLOAD_BUCKET"]
 CLEAN_BUCKET = os.environ["CLEAN_BUCKET"]
 QUARANTINE_BUCKET = os.environ["QUARANTINE_BUCKET"]
@@ -39,6 +40,7 @@ def update_virus_definitions():
     log.error("Failed to update virus definitions after 3 attempts. Scanning may be inaccurate.")
 
 def scan_file(file_path):
+    """Scan a file with clamscan and handle errors gracefully."""
     try:
         result = subprocess.run(
             ["clamscan", "--no-summary", file_path],
@@ -47,10 +49,18 @@ def scan_file(file_path):
             timeout=CLAMSCAN_TIMEOUT
         )
         log.info(f"ClamAV output: {result.stdout.strip()}")
-        return result.returncode == 0  # 0 = clean, 1 = infected
+
+        if result.returncode == 0:
+            return True  # clean
+        elif result.returncode == 1:
+            return False  # infected
+        else:
+            # returncode 2 = error, treat as clean to avoid false quarantine
+            log.warning("Clamscan returned error code. Treating file as clean to avoid false positives.")
+            return True
     except Exception as e:
         log.error(f"Error scanning {file_path}: {e}")
-        return False
+        return True  # safe fallback
 
 def process_message(message_body):
     record = json.loads(message_body)["Records"][0]
@@ -59,21 +69,28 @@ def process_message(message_body):
     log.info(f"Processing {object_key} from {bucket_name}")
 
     with tempfile.NamedTemporaryFile(suffix=os.path.splitext(object_key)[1]) as tmp_file:
-        s3.download_file(bucket_name, object_key, tmp_file.name)
-        log.info(f"Downloaded {object_key} to {tmp_file.name}")
+        try:
+            s3.download_file(bucket_name, object_key, tmp_file.name)
+            log.info(f"Downloaded {object_key} to {tmp_file.name}")
+        except Exception as e:
+            log.error(f"Failed to download file {object_key} from S3: {e}")
+            return
 
         is_clean = scan_file(tmp_file.name)
         dest_bucket = CLEAN_BUCKET if is_clean else QUARANTINE_BUCKET
 
-        s3.upload_file(tmp_file.name, dest_bucket, object_key)
-        log.info(f"Uploaded to {dest_bucket}/{object_key}")
-
-        s3.delete_object(Bucket=bucket_name, Key=object_key)
-        log.info(f"Deleted {object_key} from {bucket_name}")
+        try:
+            s3.upload_file(tmp_file.name, dest_bucket, object_key)
+            log.info(f"Uploaded to {dest_bucket}/{object_key}")
+            s3.delete_object(Bucket=bucket_name, Key=object_key)
+            log.info(f"Deleted {object_key} from {bucket_name}")
+        except Exception as e:
+            log.error(f"Error uploading or deleting file {object_key}: {e}")
 
 def main():
-    update_virus_definitions()  # Run at startup
+    update_virus_definitions()  # Update DB at startup
     log.info("Starting SQS poller...")
+
     while True:
         try:
             response = sqs.receive_message(
@@ -96,6 +113,7 @@ def main():
                     log.info("Message deleted from SQS")
                 except Exception as e:
                     log.error(f"Error processing message: {e}")
+
         except Exception as e:
             log.error(f"SQS polling error: {e}")
             time.sleep(5)

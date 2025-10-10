@@ -1,122 +1,88 @@
-import os
-import time
 import boto3
-import clamd
+import os
+import json
 import tempfile
+import subprocess
 import logging
+import time
 from urllib.parse import unquote_plus
-from botocore.exceptions import ClientError
 
-# ----------------------------
-# Logging
-# ----------------------------
+# Logging setup
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-logger = logging.getLogger()
+log = logging.getLogger()
 
-# ----------------------------
-# Environment Variables
-# ----------------------------
-UPLOAD_BUCKET = os.environ.get("UPLOAD_BUCKET")
-CLEAN_BUCKET = os.environ.get("CLEAN_BUCKET")
-QUARANTINE_BUCKET = os.environ.get("QUARANTINE_BUCKET")
-SQS_QUEUE_URL = os.environ.get("SQS_QUEUE_URL")
-
-if not all([UPLOAD_BUCKET, CLEAN_BUCKET, QUARANTINE_BUCKET, SQS_QUEUE_URL]):
-    logger.error("❌ Missing required environment variables.")
-    exit(1)
-
+# AWS clients
 s3 = boto3.client("s3")
 sqs = boto3.client("sqs")
 
-# ----------------------------
-# Connect to ClamAV
-# ----------------------------
-def connect_to_clamd(retries=10, delay=5):
-    for i in range(retries):
-        try:
-            logger.info(f"🔍 Connecting to ClamAV daemon (attempt {i+1}/{retries})...")
-            cd = clamd.ClamdNetworkSocket(host="localhost", port=3310)
-            cd.ping()
-            logger.info("✅ Connected to ClamAV.")
-            return cd
-        except Exception as e:
-            logger.warning(f"⚠️ Could not connect to ClamAV: {e}")
-            time.sleep(delay)
-    logger.error("❌ Failed to connect to ClamAV.")
-    exit(1)
+UPLOAD_BUCKET = os.environ["UPLOAD_BUCKET"]
+CLEAN_BUCKET = os.environ["CLEAN_BUCKET"]
+QUARANTINE_BUCKET = os.environ["QUARANTINE_BUCKET"]
+SQS_QUEUE_URL = os.environ["SQS_QUEUE_URL"]
 
-cd = connect_to_clamd()
+CLAMSCAN_TIMEOUT = 90  # seconds
 
-# ----------------------------
-# File Scan Logic
-# ----------------------------
-def scan_file(path):
+def scan_file(file_path):
     try:
-        result = cd.scan(path)
-        logger.info(f"🦠 Scan result: {result}")
-        if result is None:
-            return "ERROR"
-        status = list(result.values())[0][0]
-        return status
-    except Exception as e:
-        logger.error(f"❌ Error scanning file: {e}")
-        return "ERROR"
-
-def process_message(msg):
-    try:
-        body = eval(msg["Body"])
-        record = body["Records"][0]
-        bucket = record["s3"]["bucket"]["name"]
-        key = unquote_plus(record["s3"]["object"]["key"])
-
-        logger.info(f"📥 Processing file: s3://{bucket}/{key}")
-
-        with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
-            s3.download_fileobj(bucket, key, tmp_file)
-            tmp_path = tmp_file.name
-
-        result = scan_file(tmp_path)
-
-        if result == "OK":
-            logger.info("✅ Clean file. Uploading to clean bucket...")
-            s3.upload_file(tmp_path, CLEAN_BUCKET, key)
-        else:
-            logger.warning("🚨 Infected or scan failed. Uploading to quarantine bucket...")
-            s3.upload_file(tmp_path, QUARANTINE_BUCKET, key)
-
-        os.remove(tmp_path)
-        logger.info("🧹 Temporary file removed.")
-
-    except Exception as e:
-        logger.error(f"❌ Failed to process message: {e}")
-
-# ----------------------------
-# Poll SQS Forever
-# ----------------------------
-logger.info("🚀 Virus scanning service started. Polling SQS...")
-while True:
-    try:
-        resp = sqs.receive_message(
-            QueueUrl=SQS_QUEUE_URL,
-            MaxNumberOfMessages=1,
-            WaitTimeSeconds=20
+        result = subprocess.run(
+            ["clamscan", "--no-summary", file_path],
+            capture_output=True,
+            text=True,
+            timeout=CLAMSCAN_TIMEOUT
         )
-        messages = resp.get("Messages", [])
-        if not messages:
-            logger.info("📭 No messages. Waiting...")
-            continue
-
-        for msg in messages:
-            process_message(msg)
-            sqs.delete_message(
-                QueueUrl=SQS_QUEUE_URL,
-                ReceiptHandle=msg["ReceiptHandle"]
-            )
-            logger.info("✅ Message processed and deleted.")
-
-    except ClientError as e:
-        logger.error(f"❌ AWS ClientError: {e}")
-        time.sleep(5)
+        log.info(f"ClamAV output: {result.stdout.strip()}")
+        return result.returncode == 0  # 0 = clean, 1 = infected
     except Exception as e:
-        logger.error(f"❌ Unexpected error: {e}")
-        time.sleep(5)
+        log.error(f"Error scanning {file_path}: {e}")
+        return False
+
+def process_message(message_body):
+    record = json.loads(message_body)["Records"][0]
+    bucket_name = record["s3"]["bucket"]["name"]
+    object_key = unquote_plus(record["s3"]["object"]["key"])
+    log.info(f"Processing {object_key} from {bucket_name}")
+
+    with tempfile.NamedTemporaryFile(suffix=os.path.splitext(object_key)[1]) as tmp_file:
+        s3.download_file(bucket_name, object_key, tmp_file.name)
+        log.info(f"Downloaded {object_key} to {tmp_file.name}")
+
+        is_clean = scan_file(tmp_file.name)
+        dest_bucket = CLEAN_BUCKET if is_clean else QUARANTINE_BUCKET
+
+        s3.upload_file(tmp_file.name, dest_bucket, object_key)
+        log.info(f"Uploaded to {dest_bucket}/{object_key}")
+
+        s3.delete_object(Bucket=bucket_name, Key=object_key)
+        log.info(f"Deleted {object_key} from {bucket_name}")
+
+def main():
+    log.info("Starting SQS poller...")
+    while True:
+        try:
+            response = sqs.receive_message(
+                QueueUrl=SQS_QUEUE_URL,
+                MaxNumberOfMessages=1,
+                WaitTimeSeconds=10
+            )
+
+            messages = response.get("Messages", [])
+            if not messages:
+                log.info("No messages in queue. Waiting...")
+                continue
+
+            for msg in messages:
+                try:
+                    process_message(msg["Body"])
+                    sqs.delete_message(
+                        QueueUrl=SQS_QUEUE_URL,
+                        ReceiptHandle=msg["ReceiptHandle"]
+                    )
+                    log.info("Message deleted from SQS")
+                except Exception as e:
+                    log.error(f"Error processing message: {e}")
+        except Exception as e:
+            log.error(f"SQS polling error: {e}")
+            time.sleep(5)
+
+if __name__ == "__main__":
+    main()

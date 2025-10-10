@@ -1,7 +1,7 @@
-# Use Debian-based Python image for reliable apt
+# Use reliable Debian-based Python image
 FROM python:3.10-bullseye
 
-# Install system dependencies required for ClamAV
+# Install ClamAV and netcat
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         clamav \
@@ -12,7 +12,7 @@ RUN apt-get update && \
 # Set working directory
 WORKDIR /app
 
-# Copy application code and requirements
+# Copy application code and Python dependencies
 COPY app.py /app/
 COPY requirements.txt /app/
 
